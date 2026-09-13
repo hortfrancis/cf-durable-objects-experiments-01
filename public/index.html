@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en">
+<head>
+	<meta charset="utf-8" />
+	<meta name="viewport" content="width=device-width, initial-scale=1" />
+	<title>Durable Object Counter</title>
+	<style>
+		:root {
+			color-scheme: light dark;
+			font-family: system-ui, sans-serif;
+		}
+		body {
+			display: grid;
+			place-items: center;
+			min-height: 100vh;
+			margin: 0;
+			text-align: center;
+		}
+		#count {
+			font-size: 5rem;
+			font-variant-numeric: tabular-nums;
+			margin: 0.5rem 0 1.5rem;
+		}
+		button {
+			font: inherit;
+			padding: 0.6rem 1.4rem;
+			cursor: pointer;
+		}
+	</style>
+</head>
+<body>
+	<main>
+		<h1>Shared counter</h1>
+		<p id="count">…</p>
+		<button id="increment">Increment</button>
+	</main>
+
+	<script>
+		const countEl = document.getElementById("count");
+		const button = document.getElementById("increment");
+
+		async function show(response) {
+			const { count } = await response.json();
+			countEl.textContent = count;
+		}
+
+		button.addEventListener("click", async () => {
+			button.disabled = true;
+			await show(await fetch("/increment", { method: "POST" }));
+			button.disabled = false;
+		});
+
+		fetch("/count").then(show);
+	</script>
+</body>
+</html>
