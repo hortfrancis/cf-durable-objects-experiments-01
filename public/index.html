@@ -33,24 +33,32 @@
 		<h1>Shared counter</h1>
 		<p id="count">…</p>
 		<button id="increment">Increment</button>
+		<p>WebSocket: <span id="status">connecting…</span></p>
 	</main>
 
 	<script>
 		const countEl = document.getElementById("count");
+		const statusEl = document.getElementById("status");
 		const button = document.getElementById("increment");
 
-		async function show(response) {
-			const { count } = await response.json();
-			countEl.textContent = count;
-		}
+		// 1. Fetch the initial count once.
+		fetch("/count")
+			.then((response) => response.json())
+			.then(({ count }) => (countEl.textContent = count));
 
-		button.addEventListener("click", async () => {
-			button.disabled = true;
-			await show(await fetch("/increment", { method: "POST" }));
-			button.disabled = false;
+		// 2. Open a WebSocket; the Durable Object pushes { count } on every increment.
+		const wsUrl = new URL("/websocket", location.href);
+		wsUrl.protocol = location.protocol === "https:" ? "wss:" : "ws:";
+		const ws = new WebSocket(wsUrl);
+
+		ws.addEventListener("open", () => (statusEl.textContent = "connected"));
+		ws.addEventListener("close", () => (statusEl.textContent = "disconnected"));
+		ws.addEventListener("message", (event) => {
+			countEl.textContent = JSON.parse(event.data).count;
 		});
 
-		fetch("/count").then(show);
+		// 3. Increment over HTTP. The new count arrives via the WebSocket.
+		button.addEventListener("click", () => fetch("/increment", { method: "POST" }));
 	</script>
 </body>
 </html>

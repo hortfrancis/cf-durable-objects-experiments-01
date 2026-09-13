@@ -1,9 +1,9 @@
 import { DurableObject } from "cloudflare:workers";
 
 /**
- * A shared, persistent counter.
+ * A shared, persistent counter that pushes updates over WebSockets.
  *
- * - Run `npm run dev` to start a local development server
+ * - Run `npm run dev` and open http://localhost:8787 in two tabs
  * - `curl http://localhost:8787/count` to read the count
  * - `curl -X POST http://localhost:8787/increment` to increment it
  *
@@ -17,11 +17,30 @@ export class MyDurableObject extends DurableObject<Env> {
 		return (await this.ctx.storage.get<number>("count")) ?? 0;
 	}
 
-	/** Increments the count, persists it, and returns the new value. */
+	/** Increments the count, persists it, broadcasts it, and returns the new value. */
 	async increment(): Promise<number> {
 		const count = (await this.getCount()) + 1;
 		await this.ctx.storage.put("count", count);
+
+		// getWebSockets() returns every socket accepted with acceptWebSocket(),
+		// including ones accepted before the object last hibernated.
+		const message = JSON.stringify({ count });
+		for (const ws of this.ctx.getWebSockets()) {
+			ws.send(message);
+		}
+
 		return count;
+	}
+
+	/** Accepts WebSocket upgrade requests forwarded from the Worker. */
+	async fetch(request: Request): Promise<Response> {
+		const [client, server] = Object.values(new WebSocketPair());
+
+		// The Hibernation API: the runtime holds the connection open, so this
+		// object can be evicted from memory while sockets stay connected.
+		this.ctx.acceptWebSocket(server);
+
+		return new Response(null, { status: 101, webSocket: client });
 	}
 }
 
@@ -39,6 +58,14 @@ export default {
 
 		if (request.method === "POST" && url.pathname === "/increment") {
 			return Response.json({ count: await stub.increment() });
+		}
+
+		if (request.method === "GET" && url.pathname === "/websocket") {
+			if (request.headers.get("Upgrade") !== "websocket") {
+				return new Response("Expected a WebSocket upgrade", { status: 426 });
+			}
+			// Forward the upgrade request to the Durable Object's fetch() handler.
+			return stub.fetch(request);
 		}
 
 		return new Response("Not found", { status: 404 });
