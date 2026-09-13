@@ -30,14 +30,23 @@
 		button {
 			cursor: pointer;
 		}
+		label {
+			display: block;
+			margin: 2rem 0 0.5rem;
+			text-align: left;
+		}
 		form {
 			display: flex;
 			gap: 0.5rem;
-			margin-top: 2rem;
 		}
 		input {
 			flex: 1;
 			min-width: 0;
+		}
+		#live-text {
+			display: block;
+			width: 100%;
+			box-sizing: border-box;
 		}
 	</style>
 </head>
@@ -47,10 +56,14 @@
 		<p id="count">…</p>
 		<button id="increment">Increment</button>
 
+		<label for="text">Saved text (updates when someone clicks Save)</label>
 		<form id="text-form">
-			<input id="text" placeholder="Shared text" />
+			<input id="text" placeholder="Type, then Save" />
 			<button>Save</button>
 		</form>
+
+		<label for="live-text">Live text (updates as anyone types)</label>
+		<input id="live-text" placeholder="Type here" />
 
 		<p>WebSocket: <span id="status">connecting…</span></p>
 	</main>
@@ -58,6 +71,7 @@
 	<script>
 		const countEl = document.getElementById("count");
 		const textEl = document.getElementById("text");
+		const liveTextEl = document.getElementById("live-text");
 		const statusEl = document.getElementById("status");
 
 		// 1. Fetch the initial values once.
@@ -67,8 +81,11 @@
 		fetch("/text")
 			.then((response) => response.json())
 			.then(({ text }) => (textEl.value = text));
+		fetch("/live-text")
+			.then((response) => response.json())
+			.then(({ liveText }) => (liveTextEl.value = liveText));
 
-		// 2. Open a WebSocket; the Durable Object pushes { count } or { text } on every change.
+		// 2. Open a WebSocket; the Durable Object pushes { count }, { text } or { liveText } on every change.
 		const wsUrl = new URL("/websocket", location.href);
 		wsUrl.protocol = location.protocol === "https:" ? "wss:" : "ws:";
 		const ws = new WebSocket(wsUrl);
@@ -79,15 +96,30 @@
 			const data = JSON.parse(event.data);
 			if ("count" in data) countEl.textContent = data.count;
 			if ("text" in data) textEl.value = data.text;
+			if ("liveText" in data) {
+				// Keep this tab's cursor roughly in place when someone else's edit arrives.
+				const { selectionStart, selectionEnd } = liveTextEl;
+				liveTextEl.value = data.liveText;
+				liveTextEl.setSelectionRange(selectionStart, selectionEnd);
+			}
 		});
 
-		// 3. Write over HTTP. The new values arrive via the WebSocket.
+		// 3. Increment over HTTP; the new count arrives via the WebSocket.
 		document.getElementById("increment").addEventListener("click", () => {
 			fetch("/increment", { method: "POST" });
 		});
+
+		// 4. Saved text: write over HTTP when Save is clicked.
 		document.getElementById("text-form").addEventListener("submit", (event) => {
 			event.preventDefault();
 			fetch("/text", { method: "PUT", body: JSON.stringify({ text: textEl.value }) });
+		});
+
+		// 5. Live text: send over the WebSocket on every keystroke.
+		liveTextEl.addEventListener("input", () => {
+			if (ws.readyState === WebSocket.OPEN) {
+				ws.send(JSON.stringify({ liveText: liveTextEl.value }));
+			}
 		});
 	</script>
 </body>

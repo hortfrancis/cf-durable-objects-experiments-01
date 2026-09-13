@@ -1,12 +1,12 @@
 import { DurableObject } from "cloudflare:workers";
 
 /**
- * A shared, persistent counter and text string that push updates over WebSockets.
+ * A shared, persistent counter and two text strings that push updates over WebSockets.
  *
  * - Run `npm run dev` and open http://localhost:8787 in two tabs
  * - `curl http://localhost:8787/count` to read the count
  * - `curl -X POST http://localhost:8787/increment` to increment it
- * - `curl -X PUT http://localhost:8787/text -d '{"text":"hi"}'` to set the text
+ * - `curl -X PUT http://localhost:8787/text -d '{"text":"hi"}'` to set the saved text
  *
  * Learn more at https://developers.cloudflare.com/durable-objects
  */
@@ -26,25 +26,33 @@ export class MyDurableObject extends DurableObject<Env> {
 		return count;
 	}
 
-	/** Returns the shared text, defaulting to an empty string. */
+	/** Returns the saved text (updated with a Save button), defaulting to an empty string. */
 	async getText(): Promise<string> {
 		return (await this.ctx.storage.get<string>("text")) ?? "";
 	}
 
-	/** Replaces the shared text, persists it, broadcasts it, and returns it. */
+	/** Replaces the saved text, persists it, broadcasts it, and returns it. */
 	async setText(text: string): Promise<string> {
 		await this.ctx.storage.put("text", text);
 		this.broadcast({ text });
 		return text;
 	}
 
-	/** Sends a JSON message to every connected WebSocket. */
-	broadcast(message: object) {
+	/** Returns the live text (updated on every keystroke), defaulting to an empty string. */
+	async getLiveText(): Promise<string> {
+		return (await this.ctx.storage.get<string>("liveText")) ?? "";
+	}
+
+	/**
+	 * Sends a JSON message to every connected WebSocket, optionally skipping one
+	 * (the sender, so its own keystrokes aren't echoed back while it's typing).
+	 */
+	broadcast(message: object, except?: WebSocket) {
 		// getWebSockets() returns every socket accepted with acceptWebSocket(),
 		// including ones accepted before the object last hibernated.
 		const json = JSON.stringify(message);
 		for (const ws of this.ctx.getWebSockets()) {
-			ws.send(json);
+			if (ws !== except) ws.send(json);
 		}
 	}
 
@@ -58,6 +66,23 @@ export class MyDurableObject extends DurableObject<Env> {
 
 		return new Response(null, { status: 101, webSocket: client });
 	}
+
+	/**
+	 * Called by the runtime when a client sends a message, waking the object if
+	 * it was hibernating. Clients send { liveText } on every keystroke.
+	 */
+	async webSocketMessage(ws: WebSocket, message: string | ArrayBuffer) {
+		let liveText: unknown;
+		try {
+			({ liveText } = JSON.parse(String(message)));
+		} catch {
+			return; // Ignore anything that isn't JSON.
+		}
+		if (typeof liveText !== "string") return;
+
+		await this.ctx.storage.put("liveText", liveText);
+		this.broadcast({ liveText }, ws);
+	}
 }
 
 export default {
@@ -65,7 +90,7 @@ export default {
 		const url = new URL(request.url);
 
 		// Every request talks to the same Durable Object instance, named "foo",
-		// so they all share one counter and one text string.
+		// so they all share the same counter and text strings.
 		const stub = env.MY_DURABLE_OBJECT.getByName("foo");
 
 		if (request.method === "GET" && url.pathname === "/count") {
@@ -86,6 +111,11 @@ export default {
 				return new Response('Expected JSON like {"text": "..."}', { status: 400 });
 			}
 			return Response.json({ text: await stub.setText(text) });
+		}
+
+		// The live text is written over the WebSocket, so it only needs a read route.
+		if (request.method === "GET" && url.pathname === "/live-text") {
+			return Response.json({ liveText: await stub.getLiveText() });
 		}
 
 		if (request.method === "GET" && url.pathname === "/websocket") {
