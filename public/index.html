@@ -14,6 +14,7 @@
 			place-items: center;
 			min-height: 100vh;
 			margin: 0;
+			padding-inline: 16px;
 			text-align: center;
 		}
 		#count {
@@ -21,10 +22,22 @@
 			font-variant-numeric: tabular-nums;
 			margin: 0.5rem 0 1.5rem;
 		}
-		button {
+		button,
+		input {
 			font: inherit;
-			padding: 0.6rem 1.4rem;
+			padding: 0.6rem 1rem;
+		}
+		button {
 			cursor: pointer;
+		}
+		form {
+			display: flex;
+			gap: 0.5rem;
+			margin-top: 2rem;
+		}
+		input {
+			flex: 1;
+			min-width: 0;
 		}
 	</style>
 </head>
@@ -33,20 +46,29 @@
 		<h1>Shared counter</h1>
 		<p id="count">…</p>
 		<button id="increment">Increment</button>
+
+		<form id="text-form">
+			<input id="text" placeholder="Shared text" />
+			<button>Save</button>
+		</form>
+
 		<p>WebSocket: <span id="status">connecting…</span></p>
 	</main>
 
 	<script>
 		const countEl = document.getElementById("count");
+		const textEl = document.getElementById("text");
 		const statusEl = document.getElementById("status");
-		const button = document.getElementById("increment");
 
-		// 1. Fetch the initial count once.
+		// 1. Fetch the initial values once.
 		fetch("/count")
 			.then((response) => response.json())
 			.then(({ count }) => (countEl.textContent = count));
+		fetch("/text")
+			.then((response) => response.json())
+			.then(({ text }) => (textEl.value = text));
 
-		// 2. Open a WebSocket; the Durable Object pushes { count } on every increment.
+		// 2. Open a WebSocket; the Durable Object pushes { count } or { text } on every change.
 		const wsUrl = new URL("/websocket", location.href);
 		wsUrl.protocol = location.protocol === "https:" ? "wss:" : "ws:";
 		const ws = new WebSocket(wsUrl);
@@ -54,11 +76,19 @@
 		ws.addEventListener("open", () => (statusEl.textContent = "connected"));
 		ws.addEventListener("close", () => (statusEl.textContent = "disconnected"));
 		ws.addEventListener("message", (event) => {
-			countEl.textContent = JSON.parse(event.data).count;
+			const data = JSON.parse(event.data);
+			if ("count" in data) countEl.textContent = data.count;
+			if ("text" in data) textEl.value = data.text;
 		});
 
-		// 3. Increment over HTTP. The new count arrives via the WebSocket.
-		button.addEventListener("click", () => fetch("/increment", { method: "POST" }));
+		// 3. Write over HTTP. The new values arrive via the WebSocket.
+		document.getElementById("increment").addEventListener("click", () => {
+			fetch("/increment", { method: "POST" });
+		});
+		document.getElementById("text-form").addEventListener("submit", (event) => {
+			event.preventDefault();
+			fetch("/text", { method: "PUT", body: JSON.stringify({ text: textEl.value }) });
+		});
 	</script>
 </body>
 </html>

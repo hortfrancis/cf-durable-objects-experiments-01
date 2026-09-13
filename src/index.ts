@@ -1,11 +1,12 @@
 import { DurableObject } from "cloudflare:workers";
 
 /**
- * A shared, persistent counter that pushes updates over WebSockets.
+ * A shared, persistent counter and text string that push updates over WebSockets.
  *
  * - Run `npm run dev` and open http://localhost:8787 in two tabs
  * - `curl http://localhost:8787/count` to read the count
  * - `curl -X POST http://localhost:8787/increment` to increment it
+ * - `curl -X PUT http://localhost:8787/text -d '{"text":"hi"}'` to set the text
  *
  * Learn more at https://developers.cloudflare.com/durable-objects
  */
@@ -21,15 +22,30 @@ export class MyDurableObject extends DurableObject<Env> {
 	async increment(): Promise<number> {
 		const count = (await this.getCount()) + 1;
 		await this.ctx.storage.put("count", count);
+		this.broadcast({ count });
+		return count;
+	}
 
+	/** Returns the shared text, defaulting to an empty string. */
+	async getText(): Promise<string> {
+		return (await this.ctx.storage.get<string>("text")) ?? "";
+	}
+
+	/** Replaces the shared text, persists it, broadcasts it, and returns it. */
+	async setText(text: string): Promise<string> {
+		await this.ctx.storage.put("text", text);
+		this.broadcast({ text });
+		return text;
+	}
+
+	/** Sends a JSON message to every connected WebSocket. */
+	broadcast(message: object) {
 		// getWebSockets() returns every socket accepted with acceptWebSocket(),
 		// including ones accepted before the object last hibernated.
-		const message = JSON.stringify({ count });
+		const json = JSON.stringify(message);
 		for (const ws of this.ctx.getWebSockets()) {
-			ws.send(message);
+			ws.send(json);
 		}
-
-		return count;
 	}
 
 	/** Accepts WebSocket upgrade requests forwarded from the Worker. */
@@ -49,7 +65,7 @@ export default {
 		const url = new URL(request.url);
 
 		// Every request talks to the same Durable Object instance, named "foo",
-		// so they all share one counter.
+		// so they all share one counter and one text string.
 		const stub = env.MY_DURABLE_OBJECT.getByName("foo");
 
 		if (request.method === "GET" && url.pathname === "/count") {
@@ -58,6 +74,18 @@ export default {
 
 		if (request.method === "POST" && url.pathname === "/increment") {
 			return Response.json({ count: await stub.increment() });
+		}
+
+		if (request.method === "GET" && url.pathname === "/text") {
+			return Response.json({ text: await stub.getText() });
+		}
+
+		if (request.method === "PUT" && url.pathname === "/text") {
+			const { text } = await request.json<{ text?: unknown }>();
+			if (typeof text !== "string") {
+				return new Response('Expected JSON like {"text": "..."}', { status: 400 });
+			}
+			return Response.json({ text: await stub.setText(text) });
 		}
 
 		if (request.method === "GET" && url.pathname === "/websocket") {
